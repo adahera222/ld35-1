@@ -1,0 +1,28 @@
+<html>
+  program: <input type="text" id="program" value="frfrfrfr"/>
+  <br/>
+  Rules:
+  <ul>
+      <li>f - forward</li>
+      <li>b - back</li>
+      <li>&lt;space&gt; - pause</li>
+      <li>r - right turn</li>
+      <li>l - left turn</li>
+      <li>p - port step (left)</li>
+      <li>s - starboard step (right)</li>
+  </ul>
+  Push Enter to reload.
+
+  <br/>
+  <canvas id="canvas" width="800" height="600"></canvas>
+  <br/>
+  Future rules: 
+  <ul>
+      <li>&lt;^v&gt; - absolute directions</li>
+      <li>! - next instruction is immediate</li>
+      <li>(...) - group instructions</li>
+      <li>[...] - pick random instruction</li>
+      <li>&lt;number&gt; - execute next instruction <i>n</i> times</li>
+  </ul>
+  <script src="snuffle.js"></script>
+</html>
