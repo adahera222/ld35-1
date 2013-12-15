@@ -3,52 +3,13 @@
 Key = Mousetrap
 
 const FPS = 30
-const RES = 40
+const RES = 20
 const DIRS = [
         [\vy -1 \up]
         [\vx 1 \right]
         [\vy 1 \down]
         [\vx -1 \left]
 ]
-
-parts = [
-  [
-    "..x...x..."
-    "..x.*.x..."
-    "..x...x..."
-    "..xxxxx..."
-    "..x...x..."
-    "..x...x..."
-    "..x...x..."
-    "..xxxxx..."
-    "..xxxxx..."
-    "..x...x..."
-    "..x...x..."
-    "..x...x..."
-    "..xxxxx..."
-    "..x...x..."
-    "..x...x..."
-    "..x...x..."
-  ]
-  [
-    "......x..."
-    "......x..."
-    "......x..."
-    "......x..."
-    "......x..."
-    "xxxxxxxxxx"
-    "xxxxxxxxxx"
-    "xxxx*xxxxx"
-    "xxxxxxxxxx"
-    "xxxxxxxxxx"
-    "......x..."
-    "......x..."
-    "......x..."
-    "......x..."
-    "......x..."
-  ]
-]
-
 
 # Remove an element from a list (mutates)
 remove = (list, member) ->
@@ -70,6 +31,20 @@ flop = (a) ->
     for y from 0 til height
       grid[y][x] = a[x][y]
   return grid
+
+clip = (a, x, y, w, h) ->
+  grid = fill fill(0, height), width
+  for ii from 0 til w
+    for jj from 0 til h
+      grid[ii][jj] = a[x+ii][y+jj]
+  return grid
+
+stamp = (src, dst, x, y, w, h) ->
+  image = clip src, 0, 0, w, h
+  for ii from 0 til image.length
+    for jj from 0 til image.0.length
+      dst[x+ii][y+jj] = image[ii][jj]
+  return dst
 
 grid-append = (a, b) ->
   # take two x/y grids and append them left to right
@@ -102,6 +77,13 @@ class Point
 
   grid: ~>
     Point ~~(@x/RES), ~~(@y/RES)
+
+  to-grid: ~>
+    gg = @grid!
+    Point gg.x * RES, gg.y * RES
+
+  eq: (oo) ~>
+    oo.x == @x and oo.y == @y
 
 class Stage
   ->
@@ -157,7 +139,7 @@ class Character implements Centerable
     @all.filter (x) -> tag in x.tags
   @empty-all = -> @all = []
 
-  (@x, @y, @size=RES, drawable) ->
+  (@x, @y, @size=RES, drawable) ~>
     @@all.push this
     @tags = []
     @visible = true
@@ -173,9 +155,7 @@ class Character implements Centerable
 
   physics2D: ->
     @x += @vx
-    @x -= @vx if @vx and is-in-wall this
     @y += @vy
-    @y -= @vy if @vy and is-in-wall this
     @last-pos = Point @x, @y
 
   exit: ~> remove @@all, this
@@ -220,6 +200,50 @@ class Character implements Centerable
 
   tagged: (tag) ~>
     -1 < @tags.index-of tag
+
+
+class Shard extends Character
+  @DIRS =
+    0: {x: 0, y: -1, deg: 0}
+    90: {x: 1, y: 0, deg: 90}
+    180: {x: 0, y: 1, deg: 180}
+    270: {x: -1, y: 0, deg: 270}
+
+  (x, y, dir) ~>
+    super x, y, RES, (Snuffle \red, \white, \red)
+    @rotation = dir
+    @speed = 5
+    @tags.push \shard
+    @vx = @@DIRS[dir].x * @speed
+    @vy = @@DIRS[dir].y * @speed
+    @add-tick @explode-check
+    @add-tick @wraparound
+    @start-tick = window.game.frame
+    @add-tick ~>
+      if window.game.frame - @start-tick > FPS / 2
+        window.game.world.fg.remove this
+        @ticks = []
+        @exit!
+
+  wraparound: ~>
+    switch
+    | @x < 0 => @x = @speed + window.game.width - @width
+    | @x + @width > window.game.width => @x = -@speed 
+    | @y < 0 => @y = @speed + window.game.height - @height
+    | @y + @height > window.game.height => @y = -@speed
+
+  physics2D: ->
+    @x += @vx
+    @y += @vy
+
+  explode-check: ~>
+    return unless @pos!.eq @pos!.to-grid!
+    pg = @pos!.grid!
+    cell = window.game.world.bg.children.0.cells[pg.x]?[pg.y]
+    if cell and cell.solid # time to blow up
+      window.game.world.bg.children.0.cells[pg.x][pg.y] = empty-blok @x, @y
+      explode @x, @y
+      window.game.world.fg.remove this
 
 class Critter extends Character
   @commands = 'fffbrrll..'
@@ -466,32 +490,19 @@ class Flower
 
 class Room
   @solid = [\black \black \white true]
-  @empty = [\#ddd \#ccc \#ccc false]
-  @replace-squares = (grid) ->
-    map (map @@replace-square), grid
+  @empty = [\#ddd \#ccc null false]
 
-  @replace-square = ->
-    switch it
-      | \x => @@solid
-      | \. => @@empty
-      | otherwise => @@empty
-
-  (width=20, height=15) ~>
-    @mapping = pick parts
-    for xi from 0 til (width/10)-1
-      @mapping = grid-append @mapping, pick parts
-    @mapping = @@replace-squares (flop @mapping)
-
-    flower-spots = [
-      Point RES * 5, RES * 5
-      Point RES * 5, RES * 10
-      Point RES * 10, RES * 7
-      Point RES * 15, RES * 5
-      Point RES * 15, RES * 10
-    ]
+  (width=20, height=15, game=null) ~>
+    @mapping = fill fill(@@empty, width), height
+    choices = ([@@empty] * (R(4) + 5)).concat [@@solid]
+    for x from 0 til @mapping.length
+      for y from 0 til @mapping.0.length
+        @mapping[x][y] = pick choices
+        game.wall-count++ if game and @mapping[x][y].3 == true
 
 class Game
   (@width, @height, @fps) ->
+    Math.seedrandom get-codeword!
     @frame = 0
     @pause = false
     @over  = false
@@ -504,90 +515,37 @@ class Game
     @world.ground = @world.children.1 # flowers and things on the ground
     @world.fg = @world.children.2     # where characters go
 
-    Key.bind \space -> @pause = !@pause
-    #Key.bind \z ~>
-    #  cc = new Critter RES * 5, RES * 5, RES, (Snuffle \red \white \red)
-    #  @world.fg.add cc
-    #  window.critter = cc
-
-    Key.bind \a ~> #bomb
-      pos = @player.center!.grid!
-      grid = @world.bg.children.0.cells
-      grid[pos.x][pos.y] = empty-blok pos.x, pos.y
-      grid[pos.x + 1]?[pos.y]? = empty-blok pos.x + 1, pos.y
-      grid[pos.x - 1]?[pos.y]? = empty-blok pos.x - 1, pos.y
-      grid[pos.x][pos.y - 1]? = empty-blok pos.x, pos.y - 1
-      grid[pos.x][pos.y + 1]? = empty-blok pos.x, pos.y + 1
-      @world.bg.children.0.update-walls!
-
-    #TODO add an intro screen
     @loop-instance = set-interval @loop, 1000 / @fps
 
-    @player = new Character @width/2 - RES/2, @height/2, RES, (Snuffle \#aaa, \#000, \#aaa)
+    Key.bind \z ~> #blow up
+      wall-count = @wall-count
+      pos = @player.center!.to-grid!
+      cells = flatten @world.children.0.children.0.cells
+      @player.visible = false
+      explode pos.x, pos.y
+      @player.add-tick ~> #check for end of game
+        if Character.tagged \shard .length < 1
+          @player.ticks = []
+          current-wall-count = (filter (.solid), flatten @world.bg.children.0.cells).length
+          if current-wall-count == 0
+            alert "PERFECT! All #{wall-count} cells destroyed!"
+          else
+            alert "Destroyed #{wall-count - current-wall-count}/#{wall-count} walls!" +
+                  "\nPush SPACE to try again!"
+      Key.bind \z ->
+
+
+    @player = new Character @width/2, @height/2, RES, (Snuffle \red, \black, \red)
+    @player.speed = RES
     # bind movement
     for let dd in DIRS
-      Key.bind dd.2, ~> @player[dd.0] = 6 * dd.1
+      Key.bind dd.2, (~> it.prevent-default!; @player[dd.0] = 6 * dd.1; return false)
       Key.bind dd.2, (~> @player[dd.0] = 0), \keyup
 
-    world-size = Point 10, 3
-
-    stage = Room 100,15
-
-    solid = [\black \black \white true]
-    add-wall = (side, grid) -->
-      switch side
-      | \left   => grid[0] = [solid] * grid[0].length; grid
-      | \right  => grid[grid.length-1] = [solid] * grid[grid.length-1].length; grid
-      | \top    => map (.0 = solid), grid
-      | \bottom => map (.(it.length-1) = solid), grid
-
-    map (-> add-wall it, stage.mapping), [\up \down\ \left \right]
-
-    @load-room stage
+    @wall-count = 0
+    room = Room 30, 30, this
+    @load-room room
     @world.fg.add @player
-
-    @player.add-tick ~>
-      #creeping doom
-      step = 30
-      return if @frame % step > 0
-      grid = @world.bg.children.0.cells
-      colors = [\black \#666 \#999 null]
-      get-color = -> pick colors
-      map (.hour = get-color!), grid[~~(@frame/step)]
-      map (.decade = get-color!), grid[~~(@frame/step)]
-      map (.instant = get-color!), grid[~~(@frame/step)]
-
-    # If we hit the flower, pick it up
-#@player.add-tick ~>
-#      return if @world-map[@screen.x][@screen.y] == base
-#      flower = (filter (.tagged \flower), @world.ground.children)?.0
-#      if flower and (not @player.flower) and @player.intersect flower
-#        @world-map[@screen.x][@screen.y].flower = null
-#        @player.flower = flower
-#        @player.flower.graphics.scale 0.5
-#        flower.add-tick ~>
-#          flower.x = @player.x + @player.width/2
-#          flower.y = @player.y
-
-
-  screen-swap: ~>
-    #TODO check if we changed / load in one place
-    if @player.y < 0
-      @screen = Point @screen.x, @screen.y - 1
-      @player.y = @height - @player.height - 1
-      @load-room @world-map[@screen.x][@screen.y]
-    if @player.y + @player.height > @height
-      @screen = Point @screen.x, @screen.y + 1
-      @player.y =  1
-      @load-room @world-map[@screen.x][@screen.y]
-    if @player.x + @player.width > @width
-      @screen = Point @screen.x + 1, @screen.y
-      @player.x = 1
-      @load-room @world-map[@screen.x][@screen.y]
-    if @player.x < 0
-      @screen = Point @screen.x - 1, @screen.y
-      @player.x = @width - @player.width - 1
-      @load-room @world-map[@screen.x][@screen.y]
 
   load-room: (room) ~>
     @world.bg.set Map room.mapping
@@ -613,21 +571,28 @@ class Game
     for cc in Character.all
       cc?.tick!
     # Do camera translation
-    @world.ctx.save!
-    @world.ctx.translate @width/2 - @player.x, 0
     @world.draw!
-    @world.ctx.restore!
 
     if @over
       @world.draw-label 300 230 "GAME OVER"
       @world.draw-label 260 260 "push r to restart"
 
-window.game = new Game 800, 600, FPS
+restart = ->
+  it?.prevent-default!
+  clear-interval window.game.loop-instance if window.game
+  Character.empty-all!
+  Key.reset!
+  Key.bind \space, restart
+  window.game = new Game 600, 600, FPS
+  return false
 
+get-codeword = ->
+  if location.hash.length < 1
+    location.hash = prompt "What are you trying to destroy?"
+  return location.hash
 
-#TODO
-#- pick up flower
-#- drop flower at center / base
-#- place base
-#- wrap map around
-#- Add critters
+explode = (x, y) ->
+  for dir of Shard.DIRS
+    window.game.world.fg.add new Shard x, y, dir
+
+restart!
