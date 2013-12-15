@@ -1,5 +1,5 @@
 ## GLOBALS
-{map, filter, flatten} = require 'prelude-ls'
+{concat, zip-with, map, filter, flatten} = require 'prelude-ls'
 Key = Mousetrap
 
 const FPS = 30
@@ -10,11 +10,70 @@ const DIRS = [
         [\vy 1 \down]
         [\vx -1 \left]
 ]
+
+parts = [
+  [
+    "..x...x..."
+    "..x.*.x..."
+    "..x...x..."
+    "..xxxxx..."
+    "..x...x..."
+    "..x...x..."
+    "..x...x..."
+    "..xxxxx..."
+    "..xxxxx..."
+    "..x...x..."
+    "..x...x..."
+    "..x...x..."
+    "..xxxxx..."
+    "..x...x..."
+    "..x...x..."
+    "..x...x..."
+  ]
+  [
+    "......x..."
+    "......x..."
+    "......x..."
+    "......x..."
+    "......x..."
+    "xxxxxxxxxx"
+    "xxxxxxxxxx"
+    "xxxx*xxxxx"
+    "xxxxxxxxxx"
+    "xxxxxxxxxx"
+    "......x..."
+    "......x..."
+    "......x..."
+    "......x..."
+    "......x..."
+  ]
+]
+
+
 # Remove an element from a list (mutates)
 remove = (list, member) ->
   ii = list.index-of member
   if -1 < ii
     list.splice ii, 1
+
+fill = (filler, length) ->
+  return [filler] * length unless filler.slice
+  for z from 0 til length
+    filler.slice 0
+
+flop = (a) ->
+  # Transpose a 2d array
+  width = a.length
+  height = a.0.length
+  grid = fill (fill 0, width), height
+  for x from 0 til width
+    for y from 0 til height
+      grid[y][x] = a[x][y]
+  return grid
+
+grid-append = (a, b) ->
+  # take two x/y grids and append them left to right
+  zip-with ((x,y) -> x.concat y), a, b
 
 deg-to-rad = -> it * (Math.PI / 180)
 
@@ -39,7 +98,10 @@ class Point
     new Point @x + dx, @y + dy
 
   clamped: ~>
-    new Point ~~@x, ~~@y
+    Point ~~@x, ~~@y
+
+  grid: ~>
+    Point ~~(@x/RES), ~~(@y/RES)
 
 class Stage
   ->
@@ -106,6 +168,8 @@ class Character implements Centerable
     @width = @height = @size
     @vx = 0; @vy = 0; @last-pos = Point 0, 0
     @last-dir = DIRS.0
+
+  pos: ~> Point @x, @y
 
   physics2D: ->
     @x += @vx
@@ -272,7 +336,7 @@ class Shrine
     ctx.restore!
 
 class Blok
-  (@hour, @decade, @instant, @x=0, @y=0, @height=RES) ->
+  (@hour, @decade, @instant, @x=0, @y=0, @solid=false, @height=RES) ->
     @width = @height
 
   center: ~>
@@ -316,12 +380,10 @@ class Blok
     ctx.fill-style = fill
     ctx.fill!
 
-make-wall = ->
-  colors = [\#aca \#bdb \#beb \#ada \#cec \#cfc]
-  center-colors = [\#ccc \#cfc]
-  for x from 0 til 20
-    for y from 0 til 15
-      blok = new Blok pick(colors), pick(colors), pick(center-colors), x*RES, y*RES
+empty-blok = (x, y) ->
+  new Blok \#ddd, \#ccc, \#ccc, x*RES, y*RES, false
+solid-blok = (x, y) ->
+  new Blok \black, \black, \white, x*RES, y*RES, true
 
 # This shouldn't be global but where to put it is unclear
 # TODO slow, make it smarter
@@ -337,10 +399,9 @@ class Map
     # Mapping is a 2d array of [color color color solid?]
     colors = [\#aca \#bdb \#beb \#ada \#cec \#cfc]
     center-colors = [\#ccc \#cfc]
-    m = @mapping
 
-    @cells = for x from 0 til 20
-      for y from 0 til 15
+    @cells = for x from 0 til @mapping.length
+      for y from 0 til @mapping.0.length
         m = @mapping[x][y]
         blok = new Blok m.0, m.1, m.2, x*RES, y*RES
         blok.solid = m.3
@@ -360,7 +421,6 @@ class FlowerStack
       (Flower.random ~~(size * 0.8)),
       (Flower.random ~~(size * 0.5))
     ]
-    console.log @flowers
 
   draw: (ctx, pos) ~>
     ctx.save!
@@ -405,15 +465,23 @@ class Flower
     ctx.restore!
 
 class Room
-  (x, y, width=20, height=15) ~>
-    solid = [\black \black \white true]
-    empty = [\#ddd \#ccc \#ccc false]
-    @mapping =
-      for xi from 0 til width
-        for yi from 0 til height
-          empty
+  @solid = [\black \black \white true]
+  @empty = [\#ddd \#ccc \#ccc false]
+  @replace-squares = (grid) ->
+    map (map @@replace-square), grid
 
-    #TODO place flower
+  @replace-square = ->
+    switch it
+      | \x => @@solid
+      | \. => @@empty
+      | otherwise => @@empty
+
+  (width=20, height=15) ~>
+    @mapping = pick parts
+    for xi from 0 til (width/10)-1
+      @mapping = grid-append @mapping, pick parts
+    @mapping = @@replace-squares (flop @mapping)
+
     flower-spots = [
       Point RES * 5, RES * 5
       Point RES * 5, RES * 10
@@ -421,14 +489,6 @@ class Room
       Point RES * 15, RES * 5
       Point RES * 15, RES * 10
     ]
-
-    fpos = pick flower-spots
-
-    @flower = new Character fpos.x, fpos.y, RES, new FlowerStack
-    @flower.tags.push \flower
-    @flower.origin = Point x, y
-    #TODO place creature
-    #TODO place obstacles
 
 class Game
   (@width, @height, @fps) ->
@@ -445,10 +505,20 @@ class Game
     @world.fg = @world.children.2     # where characters go
 
     Key.bind \space -> @pause = !@pause
-    Key.bind \z ~>
-      cc = new Critter RES * 5, RES * 5, RES, (Snuffle \red \white \red)
-      @world.fg.add cc
-      window.critter = cc
+    #Key.bind \z ~>
+    #  cc = new Critter RES * 5, RES * 5, RES, (Snuffle \red \white \red)
+    #  @world.fg.add cc
+    #  window.critter = cc
+
+    Key.bind \a ~> #bomb
+      pos = @player.center!.grid!
+      grid = @world.bg.children.0.cells
+      grid[pos.x][pos.y] = empty-blok pos.x, pos.y
+      grid[pos.x + 1]?[pos.y]? = empty-blok pos.x + 1, pos.y
+      grid[pos.x - 1]?[pos.y]? = empty-blok pos.x - 1, pos.y
+      grid[pos.x][pos.y - 1]? = empty-blok pos.x, pos.y - 1
+      grid[pos.x][pos.y + 1]? = empty-blok pos.x, pos.y + 1
+      @world.bg.children.0.update-walls!
 
     #TODO add an intro screen
     @loop-instance = set-interval @loop, 1000 / @fps
@@ -460,19 +530,8 @@ class Game
       Key.bind dd.2, (~> @player[dd.0] = 0), \keyup
 
     world-size = Point 10, 3
-    @world-map =
-      for x from 0 til world-size.x
-        for y from 0 til world-size.y
-          Room x, y
-    w2 = ~~(world-size/2)
-    base = @world-map[0][1]
-    base.base = true
-    base.flower = null
-    base.flowers = []
-    base.shrine = new Character @width/2 - 4*RES, @height/2 + RES*2, 8 * RES, (Shrine \red \grey (8*RES))
-    @screen = Point 0, 1
-    @load-room @world-map[@screen.x][@screen.y]
-    @world.fg.add @player
+
+    stage = Room 100,15
 
     solid = [\black \black \white true]
     add-wall = (side, grid) -->
@@ -482,10 +541,10 @@ class Game
       | \top    => map (.0 = solid), grid
       | \bottom => map (.(it.length-1) = solid), grid
 
-    map (add-wall \left), (map (.mapping), @world-map.0)
-    map (add-wall \right), (map (.mapping), @world-map[@world-map.length-1])
-    map (add-wall \top), (map (.0.mapping), @world-map)
-    map (add-wall \bottom), (map (.(it.length-1).mapping), @world-map)
+    map (-> add-wall it, stage.mapping), [\up \down\ \left \right]
+
+    @load-room stage
+    @world.fg.add @player
 
     @player.add-tick ~>
       #creeping doom
@@ -499,16 +558,17 @@ class Game
       map (.instant = get-color!), grid[~~(@frame/step)]
 
     # If we hit the flower, pick it up
-    @player.add-tick ~>
-      return if @world-map[@screen.x][@screen.y] == base
-      flower = (filter (.tagged \flower), @world.ground.children)?.0
-      if flower and (not @player.flower) and @player.intersect flower
-        @world-map[@screen.x][@screen.y].flower = null
-        @player.flower = flower
-        @player.flower.graphics.scale 0.5
-        flower.add-tick ~>
-          flower.x = @player.x + @player.width/2
-          flower.y = @player.y
+#@player.add-tick ~>
+#      return if @world-map[@screen.x][@screen.y] == base
+#      flower = (filter (.tagged \flower), @world.ground.children)?.0
+#      if flower and (not @player.flower) and @player.intersect flower
+#        @world-map[@screen.x][@screen.y].flower = null
+#        @player.flower = flower
+#        @player.flower.graphics.scale 0.5
+#        flower.add-tick ~>
+#          flower.x = @player.x + @player.width/2
+#          flower.y = @player.y
+
 
   screen-swap: ~>
     #TODO check if we changed / load in one place
@@ -552,10 +612,9 @@ class Game
     @frame++
     for cc in Character.all
       cc?.tick!
-    #TODO check for screen switch
-    @screen-swap!
+    # Do camera translation
     @world.ctx.save!
-    @world.ctx.translate @width/2 - @player.x, @height/2 - @player.y
+    @world.ctx.translate @width/2 - @player.x, 0
     @world.draw!
     @world.ctx.restore!
 
