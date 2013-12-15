@@ -323,11 +323,15 @@
         deg: 270
       }
     };
+    Shard.color = function(){
+      return pick(['red', 'green', 'blue', 'purple', 'orange', 'white', 'cyan']);
+    };
     function Shard(x, y, dir){
-      var this$ = this instanceof ctor$ ? this : new ctor$;
+      var cc, this$ = this instanceof ctor$ ? this : new ctor$;
       this$.explodeCheck = bind$(this$, 'explodeCheck', prototype);
       this$.wraparound = bind$(this$, 'wraparound', prototype);
-      Shard.superclass.call(this$, x, y, RES, Snuffle('red', 'white', 'red'));
+      cc = constructor.color();
+      Shard.superclass.call(this$, x, y, RES, Snuffle(cc, 'white', cc));
       this$.rotation = dir;
       this$.speed = 5;
       this$.tags.push('shard');
@@ -337,7 +341,7 @@
       this$.addTick(this$.wraparound);
       this$.startTick = window.game.frame;
       this$.addTick(function(){
-        if (window.game.frame - this$.startTick > FPS / 2) {
+        if (window.game.frame - this$.startTick > 15) {
           window.game.world.fg.remove(this$);
           this$.ticks = [];
           return this$.exit();

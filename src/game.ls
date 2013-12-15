@@ -209,8 +209,12 @@ class Shard extends Character
     180: {x: 0, y: 1, deg: 180}
     270: {x: -1, y: 0, deg: 270}
 
+  @color = ->
+    pick [\red \green \blue \purple \orange \white \cyan]
+
   (x, y, dir) ~>
-    super x, y, RES, (Snuffle \red, \white, \red)
+    cc = @@color!
+    super x, y, RES, (Snuffle cc, \white, cc)
     @rotation = dir
     @speed = 5
     @tags.push \shard
@@ -220,7 +224,7 @@ class Shard extends Character
     @add-tick @wraparound
     @start-tick = window.game.frame
     @add-tick ~>
-      if window.game.frame - @start-tick > FPS / 2
+      if window.game.frame - @start-tick > 15
         window.game.world.fg.remove this
         @ticks = []
         @exit!
