@@ -154,6 +154,60 @@ class Character implements Centerable
     oc = x: oo.x + (oo.width / 2), y: oo.y + (oo.height / 2)
     Math.sqrt ((mc.x - oc.x) ^ 2) + ((mc.y - oc.y) ^ 2)
 
+  tagged: (tag) ~>
+    -1 < @tags.index-of tag
+
+class Critter extends Character
+  @commands = 'fffbrrll..'
+  @random-pattern = ->
+    for x from 0 til 10
+      pick @commands
+
+  @DIRS =
+    0: {x: 0, y: -1, deg: 0}
+    90: {x: 1, y: 0, deg: 90}
+    180: {x: 0, y: 1, deg: 180}
+    270: {x: -1, y: 0, deg: 270}
+
+  (...) ~>
+    super ...
+    @rotation = pick(@@DIRS).deg
+    @index = 0
+    @patterns =[
+      @@random-pattern!
+      @@random-pattern!
+    ]
+    @add-tick @wander
+    @speed = 10
+    @add-tick @rotation-tick
+    @active-pattern = pick @patterns
+
+  rotation-tick: ~> @rotation += ~~@va %% 360
+
+  wander: ~>
+    return unless window.game.frame % (FPS/2) == 0
+    if @index > @active-pattern.length
+      @index = 0
+      @active-pattern = pick @patterns
+    @move @active-pattern[@index]
+    @index++
+
+  orientation: (rotation = @rotation) ~>
+    ind = ~~((rotation + 44) / 90) %% 4
+    @@DIRS[ind*90]
+
+  stop: ~> @vx = 0; @vy = 0; @va = 0
+
+  move: (dir) ~>
+    ori = @orientation!
+    @stop!
+    switch dir
+    | \f => @vx = ori.x * @speed; @vy = ori.y * @speed
+    | \b => @vx = -ori.x * @speed; @vy = -ori.y * @speed
+    | \r => @va =  90 / (FPS/2)
+    | \l => @va = -90 / (FPS/2)
+    | otherwise => \nothing
+
 draw-arc = (color, start, radius, ctx, rads) ->
   ctx.begin-path!
   ctx.arc start.x, start.y, radius, Math.PI, Math.PI + rads
@@ -211,8 +265,11 @@ class Shrine
 
   draw: (ctx, pos) ~>
     pos = Point pos.x + @size/2, pos.y
+    ctx.save!
+    ctx.global-alpha = 0.9
     draw-semicircle @moon, pos, @size/2, ctx
     draw-triangle @wedge, pos, -@size/2, ctx, @size
+    ctx.restore!
 
 class Blok
   (@hour, @decade, @instant, @x=0, @y=0, @height=RES) ->
@@ -293,6 +350,9 @@ class Map
   draw: (ctx) ~>
     map (.draw ctx), flatten @cells
 
+  update-walls: ~>
+    @walls = filter (.solid is true), flatten @cells
+
 class FlowerStack
   (size = RES*2) ~>
     @flowers = [
@@ -303,7 +363,13 @@ class FlowerStack
     console.log @flowers
 
   draw: (ctx, pos) ~>
+    ctx.save!
+    ctx.scale @scale, @scale if @scale
     map (.draw ctx, pos), @flowers
+    ctx.restore!
+
+  scale: (scale) ~>
+    map (.scale = scale), @flowers
 
 class Flower
   @colors = [\black \red \green \blue \purple \orange \white \cyan]
@@ -327,6 +393,8 @@ class Flower
     ctx.fill-style = @color
     ctx.translate pos.x, pos.y
     ctx.move-to 0, 0
+    ctx.scale @scale, @scale if @scale
+    ctx.rotate deg-to-rad (window.game.frame % (360* 3))
     for p from 0 til @petals
       ctx.begin-path!
       ctx.bezier-curve-to @cp1.x, @cp1.y, @cp2.x, @cp2.y, @size, 0
@@ -337,12 +405,12 @@ class Flower
     ctx.restore!
 
 class Room
-  (width=20, height=15) ~>
+  (x, y, width=20, height=15) ~>
     solid = [\black \black \white true]
-    empty = [\#eee \#ddd \#ddd false]
+    empty = [\#ddd \#ccc \#ccc false]
     @mapping =
-      for x from 0 til width
-        for y from 0 til height
+      for xi from 0 til width
+        for yi from 0 til height
           empty
 
     #TODO place flower
@@ -357,6 +425,8 @@ class Room
     fpos = pick flower-spots
 
     @flower = new Character fpos.x, fpos.y, RES, new FlowerStack
+    @flower.tags.push \flower
+    @flower.origin = Point x, y
     #TODO place creature
     #TODO place obstacles
 
@@ -375,46 +445,107 @@ class Game
     @world.fg = @world.children.2     # where characters go
 
     Key.bind \space -> @pause = !@pause
-
-    Key.bind \a ~>
-      s = new Character 10 * RES, 10 * RES, 4 * RES, (Shrine \#39f, \#cc6)
-      @world.ground.add s
-
     Key.bind \z ~>
-      f = new Character @player.x, @player.y, 4 * RES, new FlowerStack
-      @world.ground.add f
+      cc = new Critter RES * 5, RES * 5, RES, (Snuffle \red \white \red)
+      @world.fg.add cc
+      window.critter = cc
 
     #TODO add an intro screen
     @loop-instance = set-interval @loop, 1000 / @fps
 
-    @player = new Character 3* RES, 3* RES, RES, (Snuffle \#aaa, \#000, \#aaa)
+    @player = new Character @width/2 - RES/2, @height/2, RES, (Snuffle \#aaa, \#000, \#aaa)
     # bind movement
     for let dd in DIRS
       Key.bind dd.2, ~> @player[dd.0] = 6 * dd.1
       Key.bind dd.2, (~> @player[dd.0] = 0), \keyup
 
-    solid = [\black \black \white true]
-    empty = [\#eee \#ddd \#ddd false]
-    mapping = [ [solid] * 15].concat ([[empty] * 15] * 18) .concat [[solid] * 15]
-
-    @world.bg.add Map mapping
+    world-size = Point 10, 3
+    @world-map =
+      for x from 0 til world-size.x
+        for y from 0 til world-size.y
+          Room x, y
+    w2 = ~~(world-size/2)
+    base = @world-map[0][1]
+    base.base = true
+    base.flower = null
+    base.flowers = []
+    base.shrine = new Character @width/2 - 4*RES, @height/2 + RES*2, 8 * RES, (Shrine \red \grey (8*RES))
+    @screen = Point 0, 1
+    @load-room @world-map[@screen.x][@screen.y]
     @world.fg.add @player
 
-    mapping = [ [solid] * 15].concat ([[empty] * 15] * 18) .concat [[solid] * 15]
-    mapping2 = [ [solid] * 15].concat ([[empty] * 15] * 17) .concat [[solid] * 15] * 2
-    mapping3 = [ [solid] * 15].concat ([[empty] * 15] * 16) .concat [[solid] * 15] * 3
-    @world-map = [[mapping, mapping2, mapping3]]
-    @screen = Point 0, 0
+    solid = [\black \black \white true]
+    add-wall = (side, grid) -->
+      switch side
+      | \left   => grid[0] = [solid] * grid[0].length; grid
+      | \right  => grid[grid.length-1] = [solid] * grid[grid.length-1].length; grid
+      | \top    => map (.0 = solid), grid
+      | \bottom => map (.(it.length-1) = solid), grid
+
+    map (add-wall \left), (map (.mapping), @world-map.0)
+    map (add-wall \right), (map (.mapping), @world-map[@world-map.length-1])
+    map (add-wall \top), (map (.0.mapping), @world-map)
+    map (add-wall \bottom), (map (.(it.length-1).mapping), @world-map)
+
+    @player.add-tick ~>
+      #creeping doom
+      step = 30
+      return if @frame % step > 0
+      grid = @world.bg.children.0.cells
+      colors = [\black \#666 \#999 null]
+      get-color = -> pick colors
+      map (.hour = get-color!), grid[~~(@frame/step)]
+      map (.decade = get-color!), grid[~~(@frame/step)]
+      map (.instant = get-color!), grid[~~(@frame/step)]
+
+    # If we hit the flower, pick it up
+    @player.add-tick ~>
+      return if @world-map[@screen.x][@screen.y] == base
+      flower = (filter (.tagged \flower), @world.ground.children)?.0
+      if flower and (not @player.flower) and @player.intersect flower
+        @world-map[@screen.x][@screen.y].flower = null
+        @player.flower = flower
+        @player.flower.graphics.scale 0.5
+        flower.add-tick ~>
+          flower.x = @player.x + @player.width/2
+          flower.y = @player.y
 
   screen-swap: ~>
+    #TODO check if we changed / load in one place
     if @player.y < 0
       @screen = Point @screen.x, @screen.y - 1
-      @world.bg.set Map @world-map[@screen.x][@screen.y]
       @player.y = @height - @player.height - 1
+      @load-room @world-map[@screen.x][@screen.y]
     if @player.y + @player.height > @height
       @screen = Point @screen.x, @screen.y + 1
-      @world.bg.set Map @world-map[@screen.x][@screen.y]
       @player.y =  1
+      @load-room @world-map[@screen.x][@screen.y]
+    if @player.x + @player.width > @width
+      @screen = Point @screen.x + 1, @screen.y
+      @player.x = 1
+      @load-room @world-map[@screen.x][@screen.y]
+    if @player.x < 0
+      @screen = Point @screen.x - 1, @screen.y
+      @player.x = @width - @player.width - 1
+      @load-room @world-map[@screen.x][@screen.y]
+
+  load-room: (room) ~>
+    @world.bg.set Map room.mapping
+    @world.ground.clear!
+    if @player.flower
+      if room.base # we delivered it!
+        console.log "Flower collected!"
+        ff = @player.flower
+        ff.ticks = []
+        room.flowers.push ff
+        ff.x = @width/4 + ((1+ff.origin.x) * (@width/(2*9))) - RES/2
+        ff.y = @height/4 + ((1+ff.origin.y) * (@height/(2*9)))
+        @player.flower = false
+      else @world.ground.add @player.flower
+    @world.ground.add room.shrine if room.shrine
+    @world.ground.add room.flower if room.flower # flowers can be taken
+    map @world.ground.add, room.flowers if room.flowers
+    # TODO add critters etc.
 
   loop: ~>
     return if @pause
@@ -423,10 +554,21 @@ class Game
       cc?.tick!
     #TODO check for screen switch
     @screen-swap!
+    @world.ctx.save!
+    @world.ctx.translate @width/2 - @player.x, @height/2 - @player.y
     @world.draw!
+    @world.ctx.restore!
+
     if @over
       @world.draw-label 300 230 "GAME OVER"
       @world.draw-label 260 260 "push r to restart"
 
 window.game = new Game 800, 600, FPS
 
+
+#TODO
+#- pick up flower
+#- drop flower at center / base
+#- place base
+#- wrap map around
+#- Add critters
